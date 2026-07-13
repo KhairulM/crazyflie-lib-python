@@ -1,0 +1,25 @@
+{
+  "algo": "ppo",
+  "artifact_version": 1,
+  "ctbr": {
+    "dt": 0.02,
+    "lpf_coef": 1.0,
+    "max_thrust_ratio": 0.9,
+    "min_thrust_ratio": 0.0,
+    "target_clip": 1.0
+  },
+  "notes": {
+    "action_transform": "PIDrate",
+    "checkpoint": "scripts/wandb/latest-run/files/checkpoint_final.pt",
+    "pursuer_model": "Crazyflie",
+    "task": "Intercept"
+  },
+  "obs": {
+    "action_dim": 4,
+    "obs_dim": 16,
+    "use_ab_world_frame": false,
+    "use_relative_velocity": false,
+    "use_rot_speed": false
+  },
+  "sim_dt": 0.02
+}
