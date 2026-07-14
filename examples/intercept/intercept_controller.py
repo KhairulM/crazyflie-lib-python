@@ -31,7 +31,16 @@ Live state is streamed back with ``cflib`` log blocks:
 * position + world-frame velocity: ``stateEstimate.{x,y,z,vx,vy,vz}``
 * orientation quaternion: ``stateEstimate.{qw,qx,qy,qz}``
 * body-frame angular velocity (only when the policy needs it): ``gyro.{x,y,z}``
-
+Motion capture (optional)
+-------------------------
+With ``--mocap`` the controller opens an OptiTrack/NatNet stream, transforms
+each rigid-body pose into the ROS FLU convention (see
+``intercept_common.transform_mocap_pose``) and forwards it to the matching
+drone's on-board estimator via ``extpos.send_extpose``. The fused estimate is
+then read back through the ``stateEstimate.*`` log blocks as usual, so the
+policy always consumes the EKF output. Poses can additionally be published on a
+ROS 2 ``/tf`` tree with ``--publish-tf`` (``rclpy`` is imported lazily only
+then).
 Example
 -------
 ::
@@ -76,6 +85,13 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 import intercept_common as ic  # noqa: E402
+
+# OptiTrack / NatNet streaming client (sibling module). ``_THIS_DIR`` is already
+# on ``sys.path``; kept optional so the controller runs without a mocap setup.
+try:
+    from NatNetClient import NatNetClient  # noqa: E402
+except Exception:  # pragma: no cover - mocap is an optional feature
+    NatNetClient = None
 
 
 # Firmware stabilization modes for send_setpoint's roll/pitch fields.
@@ -199,6 +215,161 @@ class PositionBuffer:
 
 
 # ---------------------------------------------------------------------------
+# Motion-capture (OptiTrack / NatNet) integration
+# ---------------------------------------------------------------------------
+def _detect_local_ip_for_server(server_ip: str) -> str:
+    """Return the local interface IP that routes to ``server_ip``.
+
+    Uses a connect-less UDP socket so no packets are sent; the kernel simply
+    resolves the outbound interface. Falls back to ``0.0.0.0`` (bind-any) if the
+    route cannot be determined.
+    """
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect((server_ip, 1))
+        return sock.getsockname()[0]
+    except OSError:
+        return "0.0.0.0"
+    finally:
+        sock.close()
+
+
+class MocapTfPublisher:
+    """Optional ROS 2 TF publisher for mocap poses.
+
+    ``rclpy`` is imported lazily so the controller keeps its pure-``cflib``
+    dependency footprint unless TF publishing is explicitly requested.
+    """
+
+    def __init__(self, world_frame: str = "world",
+                 node_name: str = "intercept_mocap_tf") -> None:
+        import rclpy
+        from tf2_msgs.msg import TFMessage
+        from geometry_msgs.msg import TransformStamped
+
+        self._rclpy = rclpy
+        self._TFMessage = TFMessage
+        self._TransformStamped = TransformStamped
+        self._world_frame = world_frame
+        self._owns_rclpy = not rclpy.ok()
+        if self._owns_rclpy:
+            rclpy.init()
+        self._node = rclpy.create_node(node_name)
+        self._pub = self._node.create_publisher(TFMessage, "tf", 10)
+
+    def publish(self, child_frame_id: str, pose: "ic.MocapPose") -> None:
+        transform = self._TransformStamped()
+        transform.header.stamp = self._node.get_clock().now().to_msg()
+        transform.header.frame_id = self._world_frame
+        transform.child_frame_id = child_frame_id
+        px, py, pz = pose.position
+        transform.transform.translation.x = float(px)
+        transform.transform.translation.y = float(py)
+        transform.transform.translation.z = float(pz)
+        qx, qy, qz, qw = pose.quat_xyzw
+        transform.transform.rotation.x = float(qx)
+        transform.transform.rotation.y = float(qy)
+        transform.transform.rotation.z = float(qz)
+        transform.transform.rotation.w = float(qw)
+        self._pub.publish(self._TFMessage(transforms=[transform]))
+
+    def close(self) -> None:
+        try:
+            self._node.destroy_node()
+        except Exception:  # pragma: no cover - best-effort teardown
+            pass
+        if self._owns_rclpy:
+            try:
+                self._rclpy.shutdown()
+            except Exception:  # pragma: no cover - best-effort teardown
+                pass
+
+
+class MocapReceiver:
+    """Stream OptiTrack rigid-body poses and forward them to Crazyflie EKFs.
+
+    The receiver owns a background NatNet thread (started by :meth:`start`).
+    Each rigid-body frame is transformed into the ROS FLU convention via
+    :func:`intercept_common.transform_mocap_pose` and pushed to the Crazyflie
+    registered under the matching streaming id through ``extpos.send_extpose``.
+    Poses are optionally re-published on a ROS 2 TF tree. Frames for
+    unregistered ids are ignored.
+    """
+
+    def __init__(self, cfg: "ic.MocapConfig",
+                 tf_publisher: Optional[MocapTfPublisher] = None) -> None:
+        if NatNetClient is None:
+            raise RuntimeError(
+                "NatNetClient.py could not be imported; place it next to "
+                "intercept_controller.py to use --mocap.")
+        self._cfg = cfg
+        self._tf_publisher = tf_publisher
+        self._targets: dict = {}
+        self._lock = threading.Lock()
+        self._client = None
+
+    def register(self, rigid_body_id: int, cf: Crazyflie,
+                 frame_id: Optional[str] = None) -> None:
+        """Route frames for ``rigid_body_id`` to ``cf`` (and TF ``frame_id``)."""
+        rb_id = int(rigid_body_id)
+        with self._lock:
+            self._targets[rb_id] = (cf, frame_id or f"cf_{rb_id}")
+
+    def start(self) -> None:
+        if NatNetClient is None:  # pragma: no cover - guarded in __init__ too
+            raise RuntimeError("NatNetClient.py is not importable.")
+        client = NatNetClient()
+        client.serverIPAddress = self._cfg.server_ip
+        client.localIPAddress = (
+            self._cfg.local_ip
+            or _detect_local_ip_for_server(self._cfg.server_ip))
+        client.multicastAddress = self._cfg.multicast_address
+        client.commandPort = self._cfg.command_port
+        client.dataPort = self._cfg.data_port
+        client.rigidBodyListener = self._on_rigid_body
+        self._client = client
+        client.run()
+
+    def _on_rigid_body(self, rigid_body_id, position, rotation,
+                       tracking_valid) -> None:
+        with self._lock:
+            target = self._targets.get(int(rigid_body_id))
+        if target is None:
+            return
+        cf, frame_id = target
+
+        pose = ic.transform_mocap_pose(
+            self._cfg, int(rigid_body_id), position, rotation, tracking_valid)
+        if not pose.tracking_valid:
+            return
+
+        px, py, pz = pose.position
+        qx, qy, qz, qw = pose.quat_xyzw
+        try:
+            cf.extpos.send_extpose(px, py, pz, qx, qy, qz, qw)
+        except Exception:  # pragma: no cover - link may be tearing down
+            return
+
+        if self._tf_publisher is not None:
+            self._tf_publisher.publish(frame_id, pose)
+
+    def stop(self) -> None:
+        """Best-effort teardown of the NatNet sockets (threads are daemons)."""
+        client = self._client
+        self._client = None
+        if client is None:
+            return
+        for sock_attr in ("dataSocket", "commandSocket"):
+            sock = getattr(client, sock_attr, None)
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:  # pragma: no cover - best-effort teardown
+                    pass
+
+
+# ---------------------------------------------------------------------------
 # The controller
 # ---------------------------------------------------------------------------
 class InterceptController:
@@ -249,10 +420,30 @@ class InterceptController:
         self.evader_start = np.array(args.evader_start, dtype=np.float64)
         self.evader_dir = np.array(args.evader_dir, dtype=np.float64)
 
+        # -- motion capture (OptiTrack / NatNet) -----------------------------
+        self.mocap_enabled = bool(args.mocap)
+        self.pursuer_rigid_body_id = int(args.pursuer_rigid_body_id)
+        self.evader_rigid_body_id = (
+            int(args.evader_rigid_body_id)
+            if args.evader_rigid_body_id is not None else None
+        )
+        self.publish_tf = bool(args.publish_tf)
+        self.mocap_world_frame = str(args.mocap_world_frame)
+        self.mocap_cfg = ic.MocapConfig(
+            server_ip=args.mocap_server_ip,
+            local_ip=(args.mocap_local_ip or None),
+            multicast_address=args.mocap_multicast,
+            command_port=int(args.mocap_command_port),
+            data_port=int(args.mocap_data_port),
+            body_to_flu_quat_xyzw=tuple(float(v) for v in args.mocap_body_flu_quat),
+        )
+
         # -- runtime state ---------------------------------------------------
         self._need_rot_speed = self.metadata.obs.use_rot_speed
         self._pursuer = StateBuffer()
         self._evader = PositionBuffer()
+        self._mocap_receiver: Optional[MocapReceiver] = None
+        self._mocap_tf_publisher: Optional[MocapTfPublisher] = None
         # Optional trajectory logging for post-flight visualization.
         self.save_trajectory = bool(args.save_trajectory)
         self.trajectory_dir = os.path.abspath(
@@ -309,6 +500,39 @@ class InterceptController:
                 pass
         self._pursuer_traj_fp = None
         self._evader_traj_fp = None
+
+    # -- motion capture ------------------------------------------------------
+    def _start_mocap(self, pursuer_cf: Crazyflie,
+                     evader_cf: Optional[Crazyflie] = None) -> None:
+        """Open the OptiTrack stream and route poses to the drone EKF(s)."""
+        if not self.mocap_enabled:
+            return
+
+        tf_publisher = None
+        if self.publish_tf:
+            tf_publisher = MocapTfPublisher(world_frame=self.mocap_world_frame)
+
+        receiver = MocapReceiver(self.mocap_cfg, tf_publisher=tf_publisher)
+        receiver.register(self.pursuer_rigid_body_id, pursuer_cf)
+        registered = f"pursuer id={self.pursuer_rigid_body_id}"
+        if evader_cf is not None and self.evader_rigid_body_id is not None:
+            receiver.register(self.evader_rigid_body_id, evader_cf)
+            registered += f", evader id={self.evader_rigid_body_id}"
+
+        receiver.start()
+        self._mocap_receiver = receiver
+        self._mocap_tf_publisher = tf_publisher
+        print(f"[intercept] Mocap streaming from {self.mocap_cfg.server_ip} "
+              f"({registered})"
+              + ("; publishing /tf" if tf_publisher is not None else "") + ".")
+
+    def _stop_mocap(self) -> None:
+        if self._mocap_receiver is not None:
+            self._mocap_receiver.stop()
+            self._mocap_receiver = None
+        if self._mocap_tf_publisher is not None:
+            self._mocap_tf_publisher.close()
+            self._mocap_tf_publisher = None
 
     # -- cflib logging setup -------------------------------------------------
     def _setup_pursuer_logging(self, cf: Crazyflie) -> None:
@@ -532,6 +756,8 @@ class InterceptController:
                     evader_scf.open_link()
                     self._setup_evader_logging(evader_scf.cf)
 
+                self._start_mocap(scf.cf, evader_cf)
+
                 try:
                     self._fly(scf.cf, evader_cf=evader_cf)
                 except KeyboardInterrupt:
@@ -539,6 +765,7 @@ class InterceptController:
                 finally:
                     self._shutdown(scf.cf)
         finally:
+            self._stop_mocap()
             if evader_scf is not None:
                 try:
                     evader_scf.close_link()
@@ -561,61 +788,112 @@ class InterceptController:
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# Configuration (YAML)
 # ---------------------------------------------------------------------------
-def _parse_args(argv=None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Run an exported Intercept policy on a Crazyflie via cflib.")
-    p.add_argument("--uri", default="udp://127.0.0.1:19850",
-                   help="Crazyflie URI of the pursuer/interceptor.")
-    p.add_argument("--artifact-dir", required=True,
-                   help="Folder with policy_ts.pt + metadata.json.")
-    p.add_argument("--rw-cache", default="./cache",
-                   help="cflib read/write cache directory.")
-    p.add_argument("--evader-source", default="cf",
-                   choices=["scripted", "cf"],
-                   help="Evader from an internal trajectory or a second Crazyflie.")
-    p.add_argument("--evader-uri", default="udp://127.0.0.1:19851",
-                   help="Crazyflie URI of the evader (when --evader-source=cf).")
-    p.add_argument("--max-thrust-pwm", type=float, default=65535.0,
-                   help="Upper clamp on the commanded thrust (0..65535).")
-    p.add_argument("--rate-sign", type=float, nargs=3, default=[1.0, 1.0, 1.0],
-                   metavar=("ROLL", "PITCH", "YAW"),
-                   help="Per-axis sign flips for the commanded body rates.")
-    p.add_argument("--log-commands", action="store_true",
-                   help="Log the decoded body rates + thrust each tick.")
-    p.add_argument("--state-timeout", type=float, default=0.5,
-                   help="Stop the drone if state is stale for this long (s).")
-    p.add_argument("--min-altitude", type=float, default=0.15,
-                   help="Safety cutoff altitude (m).")
-    p.add_argument("--control-rate-hz", type=float, default=0.0,
-                   help="Control-loop rate (0 = use the policy's training dt).")
-    p.add_argument("--takeoff", action="store_true",
-                   help="Do a short open-loop takeoff before running the policy.")
-    p.add_argument("--takeoff-thrust", type=int, default=50000,
-                   help="Legacy CTBR takeoff thrust PWM (unused; takeoff uses hover setpoints).")
-    p.add_argument("--takeoff-hover-z", type=float, default=1.0,
-                   help="Absolute hover height target (m) used during --takeoff.")
-    p.add_argument("--takeoff-duration", type=float, default=3.0,
-                   help="Open-loop takeoff duration (s).")
-    p.add_argument("--save-trajectory", action="store_true",
-                   help="Save pursuer/evader trajectories to separate CSV files.")
-    p.add_argument("--trajectory-dir", default="./trajectory_logs",
-                   help="Output directory for trajectory CSV files.")
-    p.add_argument("--trajectory-prefix", default="intercept",
-                   help="Prefix for generated trajectory CSV file names.")
-    p.add_argument("--evader-speed", type=float, default=3.0,
-                   help="Scripted evader speed (m/s).")
-    p.add_argument("--evader-start", type=float, nargs=3, default=[3.0, 0.0, 1.6],
-                   metavar=("X", "Y", "Z"), help="Scripted evader start position.")
-    p.add_argument("--evader-dir", type=float, nargs=3, default=[1.0, 0.0, 0.0],
-                   metavar=("X", "Y", "Z"), help="Scripted evader direction.")
-    return p.parse_args(argv)
+DEFAULT_CONFIG_PATH = os.path.join(_THIS_DIR, "intercept_config.yaml")
+
+
+def load_config(path: str) -> argparse.Namespace:
+    """Load the controller configuration from a YAML file.
+
+    The nested YAML schema (see ``intercept_config.yaml``) is flattened into the
+    attribute names consumed by :class:`InterceptController`. Missing keys fall
+    back to documented defaults so partial configs remain valid.
+    """
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise SystemExit(
+            "PyYAML is required to read the config file. "
+            "Install it with: pip install pyyaml"
+        ) from exc
+
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config root of {path} must be a mapping.")
+
+    def section(name: str) -> dict:
+        value = raw.get(name, {}) or {}
+        if not isinstance(value, dict):
+            raise ValueError(f"Config section '{name}' must be a mapping.")
+        return value
+
+    takeoff = section("takeoff")
+    evader = section("evader")
+    trajectory = section("trajectory")
+    mocap = section("mocap")
+
+    ns = argparse.Namespace(
+        # pursuer / connection
+        uri=raw.get("uri", "udp://127.0.0.1:19850"),
+        rw_cache=raw.get("rw_cache", "./cache"),
+        artifact_dir=raw.get("artifact_dir"),
+        # control loop
+        control_rate_hz=float(raw.get("control_rate_hz", 0.0)),
+        max_thrust_pwm=float(raw.get("max_thrust_pwm", 65535.0)),
+        rate_sign=list(raw.get("rate_sign", [1.0, 1.0, 1.0])),
+        state_timeout=float(raw.get("state_timeout", 0.5)),
+        min_altitude=float(raw.get("min_altitude", 0.15)),
+        log_commands=bool(raw.get("log_commands", False)),
+        # takeoff
+        takeoff=bool(takeoff.get("enabled", False)),
+        takeoff_thrust=int(takeoff.get("thrust", 50000)),
+        takeoff_hover_z=float(takeoff.get("hover_z", 1.0)),
+        takeoff_duration=float(takeoff.get("duration", 3.0)),
+        # evader
+        evader_source=str(evader.get("source", "cf")),
+        evader_uri=evader.get("uri", "udp://127.0.0.1:19851"),
+        evader_speed=float(evader.get("speed", 3.0)),
+        evader_start=list(evader.get("start", [3.0, 0.0, 1.6])),
+        evader_dir=list(evader.get("dir", [1.0, 0.0, 0.0])),
+        # trajectory logging
+        save_trajectory=bool(trajectory.get("save", False)),
+        trajectory_dir=trajectory.get("dir", "./trajectory_logs"),
+        trajectory_prefix=trajectory.get("prefix", "intercept"),
+        # motion capture
+        mocap=bool(mocap.get("enabled", False)),
+        mocap_server_ip=mocap.get("server_ip", "127.0.0.1"),
+        mocap_local_ip=(mocap.get("local_ip") or ""),
+        mocap_multicast=mocap.get("multicast", "239.255.42.99"),
+        mocap_command_port=int(mocap.get("command_port", 1510)),
+        mocap_data_port=int(mocap.get("data_port", 1511)),
+        pursuer_rigid_body_id=int(mocap.get("pursuer_rigid_body_id", 31)),
+        evader_rigid_body_id=mocap.get("evader_rigid_body_id", None),
+        mocap_body_flu_quat=list(
+            mocap.get("body_flu_quat", ic.DEFAULT_MOCAP_BODY_TO_FLU_QUAT_XYZW)),
+        publish_tf=bool(mocap.get("publish_tf", False)),
+        mocap_world_frame=mocap.get("world_frame", "world"),
+    )
+
+    # -- validation ----------------------------------------------------------
+    if not ns.artifact_dir:
+        raise ValueError("Config must set 'artifact_dir'.")
+    if ns.evader_source not in ("scripted", "cf"):
+        raise ValueError(
+            f"evader.source must be 'scripted' or 'cf', got '{ns.evader_source}'.")
+    for name, seq, length in (("rate_sign", ns.rate_sign, 3),
+                              ("evader.start", ns.evader_start, 3),
+                              ("evader.dir", ns.evader_dir, 3),
+                              ("mocap.body_flu_quat", ns.mocap_body_flu_quat, 4)):
+        if len(seq) != length:
+            raise ValueError(f"'{name}' must have {length} elements, got {len(seq)}.")
+    return ns
 
 
 def main(argv=None) -> None:
-    args = _parse_args(argv)
-    controller = InterceptController(args)
+    parser = argparse.ArgumentParser(
+        description="Run an exported Intercept policy on a Crazyflie via cflib. "
+                    "All settings are read from a YAML config file.")
+    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH,
+                        help="Path to the YAML configuration file "
+                             f"(default: {DEFAULT_CONFIG_PATH}).")
+    cli = parser.parse_args(argv)
+    config = load_config(cli.config)
+    controller = InterceptController(config)
     controller.run()
 
 

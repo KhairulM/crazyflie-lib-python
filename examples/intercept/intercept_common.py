@@ -321,6 +321,111 @@ def decode_action_to_ctbr(raw_action: torch.Tensor, cfg: CTBRConfig) -> CTBRComm
     )
 
 
+# ---------------------------------------------------------------------------
+# Motion-capture (OptiTrack / NatNet) pose transformation
+# ---------------------------------------------------------------------------
+# These helpers deliberately use plain Python floats (not torch) so they add
+# negligible per-frame overhead at mocap streaming rates (100-360 Hz) and keep
+# this module importable in every deployment environment.
+
+# Default body-frame correction (qx, qy, qz, qw) mapping the rigid-body axes as
+# defined in Motive onto the ROS FLU body convention (X forward, Y left, Z up).
+# Tune per rigid-body definition; override via MocapConfig.body_to_flu_quat_xyzw.
+DEFAULT_MOCAP_BODY_TO_FLU_QUAT_XYZW = (
+    0.0, 0.0, -0.7071067811865476, 0.7071067811865476,
+)
+
+
+@dataclass
+class MocapConfig:
+    """Network + frame-convention settings for a NatNet mocap stream.
+
+    Quaternions here follow the NatNet/ROS ``(qx, qy, qz, qw)`` ordering (note
+    that this differs from the Isaac ``(w, x, y, z)`` order used by the
+    observation helpers above).
+    """
+
+    server_ip: str = "127.0.0.1"
+    # None => auto-detect the local interface that routes to ``server_ip``.
+    local_ip: Optional[str] = None
+    multicast_address: str = "239.255.42.99"
+    command_port: int = 1510
+    data_port: int = 1511
+    body_to_flu_quat_xyzw: tuple = DEFAULT_MOCAP_BODY_TO_FLU_QUAT_XYZW
+
+
+@dataclass
+class MocapPose:
+    """A transformed rigid-body pose ready to feed a Crazyflie / ROS TF tree."""
+
+    rigid_body_id: int
+    position: tuple            # (x, y, z) metres, world frame (Z up)
+    quat_xyzw: tuple           # (qx, qy, qz, qw) ROS FLU body-in-world
+    tracking_valid: bool
+
+    @property
+    def quat_wxyz(self) -> tuple:
+        """Return the orientation in Isaac ``(w, x, y, z)`` order."""
+        x, y, z, w = self.quat_xyzw
+        return (w, x, y, z)
+
+
+def quat_multiply_xyzw(q1: tuple, q2: tuple) -> tuple:
+    """Hamilton product of two ``(x, y, z, w)`` quaternions."""
+    x1, y1, z1, w1 = q1
+    x2, y2, z2, w2 = q2
+    return (
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+    )
+
+
+def quat_normalize_xyzw(q: tuple, eps: float = 1e-12) -> tuple:
+    """Return the unit quaternion for ``(x, y, z, w)`` (identity if degenerate)."""
+    x, y, z, w = q
+    norm = (x * x + y * y + z * z + w * w) ** 0.5
+    if norm < eps:
+        return (0.0, 0.0, 0.0, 1.0)
+    inv = 1.0 / norm
+    return (x * inv, y * inv, z * inv, w * inv)
+
+
+def transform_mocap_pose(
+    cfg: MocapConfig,
+    rigid_body_id: int,
+    position,
+    quat_xyzw,
+    tracking_valid: bool,
+) -> MocapPose:
+    """Transform a raw NatNet rigid-body pose into the ROS FLU convention.
+
+    The fixed ``cfg.body_to_flu_quat_xyzw`` correction is applied on the right
+    of the measured orientation so that the reported body axes coincide with the
+    ROS FLU convention (X forward, Y left, Z up). Position is passed through
+    unchanged (configure Motive for a Z-up world to match ROS REP-103).
+
+    Args:
+        cfg: Mocap configuration carrying the body-frame correction.
+        rigid_body_id: Motive streaming id of the rigid body.
+        position: ``(x, y, z)`` world-frame position (metres).
+        quat_xyzw: ``(qx, qy, qz, qw)`` orientation as reported by NatNet.
+        tracking_valid: Motive's per-body tracking-valid flag.
+
+    Returns:
+        A :class:`MocapPose` with the corrected orientation.
+    """
+    corrected = quat_normalize_xyzw(
+        quat_multiply_xyzw(tuple(quat_xyzw), tuple(cfg.body_to_flu_quat_xyzw)))
+    return MocapPose(
+        rigid_body_id=int(rigid_body_id),
+        position=(float(position[0]), float(position[1]), float(position[2])),
+        quat_xyzw=corrected,
+        tracking_valid=bool(tracking_valid),
+    )
+
+
 # Standard artifact file names, referenced by both scripts.
 POLICY_TS_FILENAME = "policy_ts.pt"
 METADATA_FILENAME = "metadata.json"

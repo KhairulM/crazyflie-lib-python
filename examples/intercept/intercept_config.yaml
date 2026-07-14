@@ -1,0 +1,54 @@
+# Intercept controller configuration.
+#
+# All runtime settings for intercept_controller.py live here (no CLI flags).
+# Run with:  python intercept_controller.py [--config intercept_config.yaml]
+# Any key omitted below falls back to the documented default.
+
+# -- Pursuer / connection ----------------------------------------------------
+uri: radio://0/80/2M/E7E7E7E701      # Crazyflie URI of the pursuer.
+rw_cache: ./cache                    # cflib read/write cache directory.
+artifact_dir: artifacts/intercept_ppo_crazyflie_v4.4  # Folder with policy_ts.pt + metadata.json (required).
+
+# -- Control loop ------------------------------------------------------------
+control_rate_hz: 0.0                 # 0 = use the policy's training dt.
+max_thrust_pwm: 65535.0              # Upper clamp on commanded thrust (0..65535).
+rate_sign: [1.0, 1.0, 1.0]           # Per-axis sign flips: [roll, pitch, yaw].
+state_timeout: 0.5                   # Stop if state is stale this long (s).
+min_altitude: 0.15                   # Safety cutoff altitude (m).
+log_commands: false                  # Log decoded body rates + thrust each tick.
+
+# -- Open-loop takeoff -------------------------------------------------------
+takeoff:
+  enabled: true
+  thrust: 50000                      # Legacy CTBR takeoff PWM (unused; hover setpoints).
+  hover_z: 1.0                       # Absolute hover height target (m).
+  duration: 3.0                      # Takeoff duration (s).
+
+# -- Evader ------------------------------------------------------------------
+evader:
+  source: cf                         # "scripted" or "cf".
+  uri: radio://0/80/2M/E7E7E7E702    # Evader Crazyflie URI (when source == cf).
+  speed: 3.0                         # Scripted evader speed (m/s).
+  start: [3.0, 0.0, 1.6]             # Scripted evader start position [x, y, z].
+  dir: [1.0, 0.0, 0.0]               # Scripted evader direction [x, y, z].
+
+# -- Trajectory logging ------------------------------------------------------
+trajectory:
+  save: true
+  dir: ./trajectory_logs
+  prefix: intercept
+
+# -- Motion capture (OptiTrack / NatNet) -------------------------------------
+mocap:
+  enabled: true
+  server_ip: 192.168.0.210           # Motive/NatNet server IP.
+  local_ip: ""                       # Local NIC IP for multicast ("" = auto-detect).
+  multicast: 239.255.42.99           # NatNet multicast group address.
+  command_port: 1510
+  data_port: 1511
+  pursuer_rigid_body_id: 31          # Motive streaming id of the pursuer.
+  evader_rigid_body_id: 32           # Motive streaming id of the evader (null to disable).
+  # Body-frame correction quaternion [qx, qy, qz, qw] mapping Motive -> ROS FLU.
+  body_flu_quat: [0.0, 0.0, -0.7071067811865476, 0.7071067811865476]
+  publish_tf: false                  # Also publish poses on the ROS 2 /tf tree.
+  world_frame: world                 # Parent frame id for published TF transforms.
