@@ -1,17 +1,19 @@
-import time
 import logging
 import socket
-from threading import Thread, Event
+import time
+from threading import Event
+from threading import Thread
+
+import rclpy
+from geometry_msgs.msg import TransformStamped
+from NatNetClient import NatNetClient
+from tf2_msgs.msg import TFMessage
+
 import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 # Assuming you have downloaded NatNetClient.py in the same folder
-from NatNetClient import NatNetClient
-
-import rclpy
-from tf2_msgs.msg import TFMessage
-from geometry_msgs.msg import TransformStamped
 
 # Change these to match your exact setup
 DRONE_1_URI = 'radio://0/80/2M/E7E7E7E701'
@@ -20,7 +22,7 @@ DRONE_2_URI = 'radio://0/80/2M/E7E7E7E702'
 # Track your Motive Rigid Body IDs here
 CF1_RIGID_BODY_ID = 31
 CF2_RIGID_BODY_ID = 32
-MOTIVE_SERVER_IP = "192.168.0.210"
+MOTIVE_SERVER_IP = '192.168.0.210'
 # Set to None to auto-detect the outbound local interface used to reach Motive.
 CLIENT_LOCAL_IP = None
 
@@ -64,7 +66,7 @@ def _make_attitude_log_callback(rigid_body_id):
         pitch = data.get('stabilizer.pitch', float('nan'))
         yaw = data.get('stabilizer.yaw', float('nan'))
         print(
-            f"[EKF cf_{rigid_body_id}] roll={roll:+.1f} pitch={pitch:+.1f} yaw={yaw:+.1f}"
+            f'[EKF cf_{rigid_body_id}] roll={roll:+.1f} pitch={pitch:+.1f} yaw={yaw:+.1f}'
         )
     return _cb
 
@@ -78,7 +80,7 @@ def wait_for_connection(cf, uri, timeout=10.0):
         connected_event.set()
 
     def _failed(_uri, msg):
-        print(f"Connection to {_uri} failed: {msg}")
+        print(f'Connection to {_uri} failed: {msg}')
         failed_event.set()
 
     cf.connected.add_callback(_connected)
@@ -112,7 +114,7 @@ def _detect_local_ip_for_server(server_ip: str) -> str:
         sock.connect((server_ip, 1510))
         return sock.getsockname()[0]
     except OSError:
-        return "0.0.0.0"
+        return '0.0.0.0'
     finally:
         sock.close()
 
@@ -177,14 +179,14 @@ def main():
     tf_publisher_node = rclpy.create_node('crazyflie_tf_publisher')
     tf_publisher = tf_publisher_node.create_publisher(TFMessage, 'tf', 10)
 
-    print("Connecting to Crazyflies...")
+    print('Connecting to Crazyflies...')
     if not wait_for_connection(cf1, DRONE_1_URI):
-        print("cf1 did not connect; aborting.")
+        print('cf1 did not connect; aborting.')
         rclpy.shutdown()
         return
 
     if not wait_for_connection(cf2, DRONE_2_URI):
-        print("cf2 did not connect; aborting.")
+        print('cf2 did not connect; aborting.')
         cf1.close_link()  # Close drone 1 if drone 2 fails
         rclpy.shutdown()
         return
@@ -210,26 +212,26 @@ def main():
     )
     streaming_client.rigidBodyListener = receive_rigid_body_frame
     print(
-        "NatNet config: "
-        f"server={streaming_client.serverIPAddress}, "
-        f"local={streaming_client.localIPAddress}, "
-        f"multicast={streaming_client.multicastAddress}"
+        'NatNet config: '
+        f'server={streaming_client.serverIPAddress}, '
+        f'local={streaming_client.localIPAddress}, '
+        f'multicast={streaming_client.multicastAddress}'
     )
 
-    print("Starting OptiTrack stream loop...")
+    print('Starting OptiTrack stream loop...')
     streaming_client.run()  # This typically starts a background thread
 
     try:
-        print("System running. Press Ctrl+C to stop.")
+        print('System running. Press Ctrl+C to stop.')
         while True:
             # You can place your high-level autonomous takeoff/flight commands here
             # Example: cf1.commander.send_position_setpoint(0, 0, 0.5, 0)
             time.sleep(0.1)
             rclpy.spin_once(tf_publisher_node, timeout_sec=0.1)
     except KeyboardInterrupt:
-        print("Stopping...")
+        print('Stopping...')
     finally:
-        print("Closing links...")
+        print('Closing links...')
         cf1.close_link()
         cf2.close_link()
         tf_publisher_node.destroy_node()

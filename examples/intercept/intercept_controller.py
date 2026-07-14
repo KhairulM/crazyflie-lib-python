@@ -3,7 +3,6 @@
 # Copyright (c) 2023 Botian Xu, Tsinghua University
 #
 # See the LICENSE file at the repository root for full terms.
-
 """Run an exported Intercept policy on a Crazyflie via **cflib** (CTBR).
 
 This controller talks to the drone directly through ``cflib`` -- no ROS 2 /
@@ -51,7 +50,6 @@ Example
         --evader-source scripted \\
         --log-commands
 """
-
 from __future__ import annotations
 
 import argparse
@@ -73,10 +71,10 @@ from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 
 # Hide the known cflib warning when firmware still uses legacy hover packet type.
 warnings.filterwarnings(
-    "ignore",
-    message=r"Using legacy TYPE_HOVER_LEGACY\. Please update your crazyflie-firmware\.",
+    'ignore',
+    message=r'Using legacy TYPE_HOVER_LEGACY\. Please update your crazyflie-firmware\.',
     category=DeprecationWarning,
-    module=r"cflib\.crazyflie\.commander",
+    module=r'cflib\.crazyflie\.commander',
 )
 
 # Make the sibling ``intercept_common`` importable regardless of CWD.
@@ -230,7 +228,7 @@ def _detect_local_ip_for_server(server_ip: str) -> str:
         sock.connect((server_ip, 1))
         return sock.getsockname()[0]
     except OSError:
-        return "0.0.0.0"
+        return '0.0.0.0'
     finally:
         sock.close()
 
@@ -242,8 +240,8 @@ class MocapTfPublisher:
     dependency footprint unless TF publishing is explicitly requested.
     """
 
-    def __init__(self, world_frame: str = "world",
-                 node_name: str = "intercept_mocap_tf") -> None:
+    def __init__(self, world_frame: str = 'world',
+                 node_name: str = 'intercept_mocap_tf') -> None:
         import rclpy
         from tf2_msgs.msg import TFMessage
         from geometry_msgs.msg import TransformStamped
@@ -256,9 +254,9 @@ class MocapTfPublisher:
         if self._owns_rclpy:
             rclpy.init()
         self._node = rclpy.create_node(node_name)
-        self._pub = self._node.create_publisher(TFMessage, "tf", 10)
+        self._pub = self._node.create_publisher(TFMessage, 'tf', 10)
 
-    def publish(self, child_frame_id: str, pose: "ic.MocapPose") -> None:
+    def publish(self, child_frame_id: str, pose: 'ic.MocapPose') -> None:
         transform = self._TransformStamped()
         transform.header.stamp = self._node.get_clock().now().to_msg()
         transform.header.frame_id = self._world_frame
@@ -297,12 +295,12 @@ class MocapReceiver:
     unregistered ids are ignored.
     """
 
-    def __init__(self, cfg: "ic.MocapConfig",
+    def __init__(self, cfg: 'ic.MocapConfig',
                  tf_publisher: Optional[MocapTfPublisher] = None) -> None:
         if NatNetClient is None:
             raise RuntimeError(
-                "NatNetClient.py could not be imported; place it next to "
-                "intercept_controller.py to use --mocap.")
+                'NatNetClient.py could not be imported; place it next to '
+                'intercept_controller.py to use --mocap.')
         self._cfg = cfg
         self._tf_publisher = tf_publisher
         self._targets: dict = {}
@@ -314,11 +312,11 @@ class MocapReceiver:
         """Route frames for ``rigid_body_id`` to ``cf`` (and TF ``frame_id``)."""
         rb_id = int(rigid_body_id)
         with self._lock:
-            self._targets[rb_id] = (cf, frame_id or f"cf_{rb_id}")
+            self._targets[rb_id] = (cf, frame_id or f'cf_{rb_id}')
 
     def start(self) -> None:
         if NatNetClient is None:  # pragma: no cover - guarded in __init__ too
-            raise RuntimeError("NatNetClient.py is not importable.")
+            raise RuntimeError('NatNetClient.py is not importable.')
         client = NatNetClient()
         client.serverIPAddress = self._cfg.server_ip
         client.localIPAddress = (
@@ -360,7 +358,7 @@ class MocapReceiver:
         self._client = None
         if client is None:
             return
-        for sock_attr in ("dataSocket", "commandSocket"):
+        for sock_attr in ('dataSocket', 'commandSocket'):
             sock = getattr(client, sock_attr, None)
             if sock is not None:
                 try:
@@ -381,14 +379,14 @@ class InterceptController:
         ts_path, meta_path = ic.artifact_paths(self.artifact_dir)
         if not (os.path.isfile(ts_path) and os.path.isfile(meta_path)):
             raise FileNotFoundError(
-                f"Missing artifact(s) under {self.artifact_dir}: expected "
-                f"{ic.POLICY_TS_FILENAME} and {ic.METADATA_FILENAME}. "
-                f"Run export_policy.py first."
+                f'Missing artifact(s) under {self.artifact_dir}: expected '
+                f'{ic.POLICY_TS_FILENAME} and {ic.METADATA_FILENAME}. '
+                f'Run export_policy.py first.'
             )
         self.metadata = ic.load_metadata(meta_path)
-        self.policy = torch.jit.load(ts_path, map_location="cpu").eval()
-        print(f"[intercept] Loaded {self.metadata.algo} policy "
-              f"(obs_dim={self.metadata.obs.obs_dim}) from {ts_path}")
+        self.policy = torch.jit.load(ts_path, map_location='cpu').eval()
+        print(f'[intercept] Loaded {self.metadata.algo} policy '
+              f'(obs_dim={self.metadata.obs.obs_dim}) from {ts_path}')
 
         # -- parameters ------------------------------------------------------
         self.uri = args.uri
@@ -460,33 +458,33 @@ class InterceptController:
             return
         os.makedirs(self.trajectory_dir, exist_ok=True)
         pursuer_path = os.path.join(
-            self.trajectory_dir, f"{self.trajectory_prefix}_pursuer.csv"
+            self.trajectory_dir, f'{self.trajectory_prefix}_pursuer.csv'
         )
         evader_path = os.path.join(
-            self.trajectory_dir, f"{self.trajectory_prefix}_evader.csv"
+            self.trajectory_dir, f'{self.trajectory_prefix}_evader.csv'
         )
-        self._pursuer_traj_fp = open(pursuer_path, "w", encoding="utf-8")
-        self._evader_traj_fp = open(evader_path, "w", encoding="utf-8")
-        self._pursuer_traj_fp.write("t_rel,state_stamp,x,y,z,vx,vy,vz\n")
-        self._evader_traj_fp.write("t_rel,state_stamp,x,y,z,vx,vy,vz\n")
-        print(f"[intercept] Saving pursuer trajectory to {pursuer_path}")
-        print(f"[intercept] Saving evader trajectory to {evader_path}")
+        self._pursuer_traj_fp = open(pursuer_path, 'w', encoding='utf-8')
+        self._evader_traj_fp = open(evader_path, 'w', encoding='utf-8')
+        self._pursuer_traj_fp.write('t_rel,state_stamp,x,y,z,vx,vy,vz\n')
+        self._evader_traj_fp.write('t_rel,state_stamp,x,y,z,vx,vy,vz\n')
+        print(f'[intercept] Saving pursuer trajectory to {pursuer_path}')
+        print(f'[intercept] Saving evader trajectory to {evader_path}')
 
     def _log_trajectory(self, pursuer: DroneState, evader: DroneState) -> None:
         if self._pursuer_traj_fp is None or self._evader_traj_fp is None:
             return
         t_rel = time.time() - self._start_time
         self._pursuer_traj_fp.write(
-            f"{t_rel:.6f},{pursuer.stamp:.6f},"
-            f"{pursuer.pos[0]:.6f},{pursuer.pos[1]:.6f},{pursuer.pos[2]:.6f},"
-            f"{pursuer.lin_vel[0]:.6f},{pursuer.lin_vel[1]:.6f},"
-            f"{pursuer.lin_vel[2]:.6f}\n"
+            f'{t_rel:.6f},{pursuer.stamp:.6f},'
+            f'{pursuer.pos[0]:.6f},{pursuer.pos[1]:.6f},{pursuer.pos[2]:.6f},'
+            f'{pursuer.lin_vel[0]:.6f},{pursuer.lin_vel[1]:.6f},'
+            f'{pursuer.lin_vel[2]:.6f}\n'
         )
         self._evader_traj_fp.write(
-            f"{t_rel:.6f},{evader.stamp:.6f},"
-            f"{evader.pos[0]:.6f},{evader.pos[1]:.6f},{evader.pos[2]:.6f},"
-            f"{evader.lin_vel[0]:.6f},{evader.lin_vel[1]:.6f},"
-            f"{evader.lin_vel[2]:.6f}\n"
+            f'{t_rel:.6f},{evader.stamp:.6f},'
+            f'{evader.pos[0]:.6f},{evader.pos[1]:.6f},{evader.pos[2]:.6f},'
+            f'{evader.lin_vel[0]:.6f},{evader.lin_vel[1]:.6f},'
+            f'{evader.lin_vel[2]:.6f}\n'
         )
 
     def _close_trajectory_logging(self) -> None:
@@ -514,17 +512,17 @@ class InterceptController:
 
         receiver = MocapReceiver(self.mocap_cfg, tf_publisher=tf_publisher)
         receiver.register(self.pursuer_rigid_body_id, pursuer_cf)
-        registered = f"pursuer id={self.pursuer_rigid_body_id}"
+        registered = f'pursuer id={self.pursuer_rigid_body_id}'
         if evader_cf is not None and self.evader_rigid_body_id is not None:
             receiver.register(self.evader_rigid_body_id, evader_cf)
-            registered += f", evader id={self.evader_rigid_body_id}"
+            registered += f', evader id={self.evader_rigid_body_id}'
 
         receiver.start()
         self._mocap_receiver = receiver
         self._mocap_tf_publisher = tf_publisher
-        print(f"[intercept] Mocap streaming from {self.mocap_cfg.server_ip} "
-              f"({registered})"
-              + ("; publishing /tf" if tf_publisher is not None else "") + ".")
+        print(f'[intercept] Mocap streaming from {self.mocap_cfg.server_ip} '
+              f'({registered})'
+              + ('; publishing /tf' if tf_publisher is not None else '') + '.')
 
     def _stop_mocap(self) -> None:
         if self._mocap_receiver is not None:
@@ -537,16 +535,16 @@ class InterceptController:
     # -- cflib logging setup -------------------------------------------------
     def _setup_pursuer_logging(self, cf: Crazyflie) -> None:
         """Register the log blocks that feed the pursuer state buffer."""
-        pos_log = LogConfig(name="pos_vel", period_in_ms=10)
-        for var in ("stateEstimate.x", "stateEstimate.y", "stateEstimate.z",
-                    "stateEstimate.vx", "stateEstimate.vy", "stateEstimate.vz"):
-            pos_log.add_variable(var, "float")
+        pos_log = LogConfig(name='pos_vel', period_in_ms=10)
+        for var in ('stateEstimate.x', 'stateEstimate.y', 'stateEstimate.z',
+                    'stateEstimate.vx', 'stateEstimate.vy', 'stateEstimate.vz'):
+            pos_log.add_variable(var, 'float')
         pos_log.data_received_cb.add_callback(self._pos_vel_cb)
 
-        att_log = LogConfig(name="quat", period_in_ms=10)
-        for var in ("stateEstimate.qw", "stateEstimate.qx",
-                    "stateEstimate.qy", "stateEstimate.qz"):
-            att_log.add_variable(var, "float")
+        att_log = LogConfig(name='quat', period_in_ms=10)
+        for var in ('stateEstimate.qw', 'stateEstimate.qx',
+                    'stateEstimate.qy', 'stateEstimate.qz'):
+            att_log.add_variable(var, 'float')
         att_log.data_received_cb.add_callback(self._quat_cb)
 
         cf.log.add_config(pos_log)
@@ -555,17 +553,17 @@ class InterceptController:
         att_log.start()
 
         if self._need_rot_speed:
-            gyro_log = LogConfig(name="gyro", period_in_ms=10)
-            for var in ("gyro.x", "gyro.y", "gyro.z"):
-                gyro_log.add_variable(var, "float")
+            gyro_log = LogConfig(name='gyro', period_in_ms=10)
+            for var in ('gyro.x', 'gyro.y', 'gyro.z'):
+                gyro_log.add_variable(var, 'float')
             gyro_log.data_received_cb.add_callback(self._gyro_cb)
             cf.log.add_config(gyro_log)
             gyro_log.start()
 
     def _setup_evader_logging(self, cf: Crazyflie) -> None:
-        pos_log = LogConfig(name="evader_pos", period_in_ms=20)
-        for var in ("stateEstimate.x", "stateEstimate.y", "stateEstimate.z"):
-            pos_log.add_variable(var, "float")
+        pos_log = LogConfig(name='evader_pos', period_in_ms=20)
+        for var in ('stateEstimate.x', 'stateEstimate.y', 'stateEstimate.z'):
+            pos_log.add_variable(var, 'float')
         pos_log.data_received_cb.add_callback(self._evader_pos_cb)
         cf.log.add_config(pos_log)
         pos_log.start()
@@ -573,32 +571,32 @@ class InterceptController:
     # -- log callbacks -------------------------------------------------------
     def _pos_vel_cb(self, timestamp, data, logconf) -> None:
         self._pursuer.update_pos_vel(
-            data["stateEstimate.x"], data["stateEstimate.y"], data["stateEstimate.z"],
-            data["stateEstimate.vx"], data["stateEstimate.vy"], data["stateEstimate.vz"])
+            data['stateEstimate.x'], data['stateEstimate.y'], data['stateEstimate.z'],
+            data['stateEstimate.vx'], data['stateEstimate.vy'], data['stateEstimate.vz'])
 
     def _quat_cb(self, timestamp, data, logconf) -> None:
         self._pursuer.update_quat(
-            data["stateEstimate.qw"], data["stateEstimate.qx"],
-            data["stateEstimate.qy"], data["stateEstimate.qz"])
+            data['stateEstimate.qw'], data['stateEstimate.qx'],
+            data['stateEstimate.qy'], data['stateEstimate.qz'])
 
     def _gyro_cb(self, timestamp, data, logconf) -> None:
         self._pursuer.update_gyro_deg(
-            data["gyro.x"], data["gyro.y"], data["gyro.z"])
+            data['gyro.x'], data['gyro.y'], data['gyro.z'])
 
     def _evader_pos_cb(self, timestamp, data, logconf) -> None:
         self._evader.update(
-            data["stateEstimate.x"], data["stateEstimate.y"], data["stateEstimate.z"])
+            data['stateEstimate.x'], data['stateEstimate.y'], data['stateEstimate.z'])
 
     # -- flight-mode helpers -------------------------------------------------
     @staticmethod
     def _set_rate_mode(cf: Crazyflie) -> None:
-        cf.param.set_value("flightmode.stabModeRoll", STAB_MODE_RATE)
-        cf.param.set_value("flightmode.stabModePitch", STAB_MODE_RATE)
+        cf.param.set_value('flightmode.stabModeRoll', STAB_MODE_RATE)
+        cf.param.set_value('flightmode.stabModePitch', STAB_MODE_RATE)
 
     @staticmethod
     def _restore_angle_mode(cf: Crazyflie) -> None:
-        cf.param.set_value("flightmode.stabModeRoll", STAB_MODE_ANGLE)
-        cf.param.set_value("flightmode.stabModePitch", STAB_MODE_ANGLE)
+        cf.param.set_value('flightmode.stabModeRoll', STAB_MODE_ANGLE)
+        cf.param.set_value('flightmode.stabModePitch', STAB_MODE_ANGLE)
 
     # -- scripted evader -----------------------------------------------------
     def _scripted_evader_state(self) -> DroneState:
@@ -649,17 +647,17 @@ class InterceptController:
         time.sleep(0.1)
 
         # Wait for the first state packets before running the policy.
-        print("[intercept] Waiting for state feedback...")
+        print('[intercept] Waiting for state feedback...')
         t0 = time.time()
         while self._pursuer.snapshot() is None:
             cf.commander.send_setpoint(0.0, 0.0, 0.0, 0)
             if time.time() - t0 > 5.0:
-                raise TimeoutError("No state feedback received within 5 s.")
+                raise TimeoutError('No state feedback received within 5 s.')
             time.sleep(0.05)
 
         if self.takeoff:
-            print(f"[intercept] Open-loop takeoff (hover): z={self.takeoff_hover_z:.2f} m "
-                  f"for {self.takeoff_duration:.1f}s")
+            print(f'[intercept] Open-loop takeoff (hover): z={self.takeoff_hover_z:.2f} m '
+                  f'for {self.takeoff_duration:.1f}s')
             if evader_cf is not None:
                 evader_cf.supervisor.send_arming_request(True)
                 time.sleep(1.0)
@@ -678,7 +676,7 @@ class InterceptController:
                         0.0, 0.0, 0.0, self.takeoff_hover_z)
                 time.sleep(self.control_dt)
 
-        print(f"[intercept] Running policy at {1.0 / self.control_dt:.1f} Hz, "
+        print(f'[intercept] Running policy at {1.0 / self.control_dt:.1f} Hz, '
               f"evader_source='{self.evader_source}'. Press Ctrl+C to stop.")
         next_t = time.time()
         while self._active:
@@ -700,18 +698,18 @@ class InterceptController:
 
         now = time.time()
         if now - pursuer.stamp > self.state_timeout:
-            print("[intercept] Pursuer state timed out; stopping for safety.")
+            print('[intercept] Pursuer state timed out; stopping for safety.')
             self._active = False
             return
 
         # Safety: mirror the training "misbehave" altitude floor.
         if pursuer.pos[2] < self.min_altitude:
-            print(f"[intercept] Pursuer below min altitude "
-                  f"({pursuer.pos[2]:.2f} m); stopping.")
+            print(f'[intercept] Pursuer below min altitude '
+                  f'({pursuer.pos[2]:.2f} m); stopping.')
             self._active = False
             return
 
-        if self.evader_source == "scripted":
+        if self.evader_source == 'scripted':
             evader = self._scripted_evader_state()
         else:
             evader = self._evader.snapshot()
@@ -729,10 +727,10 @@ class InterceptController:
         if self.log_commands:
             rates = command.body_rate_deg.detach().cpu().numpy().reshape(-1)
             dist = float(np.linalg.norm(evader.pos - pursuer.pos))
-            print(f"[intercept] alt={pursuer.pos[2]:.2f}m dist={dist:.2f}m "
-                  f"rates(deg/s)=[{rates[0]:+.0f},{rates[1]:+.0f},{rates[2]:+.0f}] "
-                  f"thrust_pwm={float(command.thrust_pwm.item()):.0f} "
-                  f"(ratio={float(command.thrust_ratio.item()):.2f})")
+            print(f'[intercept] alt={pursuer.pos[2]:.2f}m dist={dist:.2f}m '
+                  f'rates(deg/s)=[{rates[0]:+.0f},{rates[1]:+.0f},{rates[2]:+.0f}] '
+                  f'thrust_pwm={float(command.thrust_pwm.item()):.0f} '
+                  f'(ratio={float(command.thrust_ratio.item()):.2f})')
 
     # -- lifecycle -----------------------------------------------------------
     def run(self) -> None:
@@ -746,10 +744,10 @@ class InterceptController:
             with SyncCrazyflie(self.uri, cf=cf) as scf:
                 self._setup_pursuer_logging(scf.cf)
 
-                if self.evader_source == "cf":
+                if self.evader_source == 'cf':
                     if not self.evader_uri:
                         raise ValueError(
-                            "--evader-uri is required when --evader-source=cf.")
+                            '--evader-uri is required when --evader-source=cf.')
                     evader_cf = Crazyflie(rw_cache=self.rw_cache)
                     evader_scf = SyncCrazyflie(
                         self.evader_uri, cf=evader_cf)
@@ -761,7 +759,7 @@ class InterceptController:
                 try:
                     self._fly(scf.cf, evader_cf=evader_cf)
                 except KeyboardInterrupt:
-                    print("\n[intercept] Stopping.")
+                    print('\n[intercept] Stopping.')
                 finally:
                     self._shutdown(scf.cf)
         finally:
@@ -784,13 +782,13 @@ class InterceptController:
             self._restore_angle_mode(cf)
         except Exception:  # pragma: no cover - best-effort teardown
             pass
-        print("[intercept] Sent stop command and restored angle mode.")
+        print('[intercept] Sent stop command and restored angle mode.')
 
 
 # ---------------------------------------------------------------------------
 # Configuration (YAML)
 # ---------------------------------------------------------------------------
-DEFAULT_CONFIG_PATH = os.path.join(_THIS_DIR, "intercept_config.yaml")
+DEFAULT_CONFIG_PATH = os.path.join(_THIS_DIR, 'intercept_config.yaml')
 
 
 def load_config(path: str) -> argparse.Namespace:
@@ -804,17 +802,17 @@ def load_config(path: str) -> argparse.Namespace:
         import yaml
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise SystemExit(
-            "PyYAML is required to read the config file. "
-            "Install it with: pip install pyyaml"
+            'PyYAML is required to read the config file. '
+            'Install it with: pip install pyyaml'
         ) from exc
 
     if not os.path.isfile(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
+        raise FileNotFoundError(f'Config file not found: {path}')
 
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, 'r', encoding='utf-8') as handle:
         raw = yaml.safe_load(handle) or {}
     if not isinstance(raw, dict):
-        raise ValueError(f"Config root of {path} must be a mapping.")
+        raise ValueError(f'Config root of {path} must be a mapping.')
 
     def section(name: str) -> dict:
         value = raw.get(name, {}) or {}
@@ -822,63 +820,63 @@ def load_config(path: str) -> argparse.Namespace:
             raise ValueError(f"Config section '{name}' must be a mapping.")
         return value
 
-    takeoff = section("takeoff")
-    evader = section("evader")
-    trajectory = section("trajectory")
-    mocap = section("mocap")
+    takeoff = section('takeoff')
+    evader = section('evader')
+    trajectory = section('trajectory')
+    mocap = section('mocap')
 
     ns = argparse.Namespace(
         # pursuer / connection
-        uri=raw.get("uri", "udp://127.0.0.1:19850"),
-        rw_cache=raw.get("rw_cache", "./cache"),
-        artifact_dir=raw.get("artifact_dir"),
+        uri=raw.get('uri', 'udp://127.0.0.1:19850'),
+        rw_cache=raw.get('rw_cache', './cache'),
+        artifact_dir=raw.get('artifact_dir'),
         # control loop
-        control_rate_hz=float(raw.get("control_rate_hz", 0.0)),
-        max_thrust_pwm=float(raw.get("max_thrust_pwm", 65535.0)),
-        rate_sign=list(raw.get("rate_sign", [1.0, 1.0, 1.0])),
-        state_timeout=float(raw.get("state_timeout", 0.5)),
-        min_altitude=float(raw.get("min_altitude", 0.15)),
-        log_commands=bool(raw.get("log_commands", False)),
+        control_rate_hz=float(raw.get('control_rate_hz', 0.0)),
+        max_thrust_pwm=float(raw.get('max_thrust_pwm', 65535.0)),
+        rate_sign=list(raw.get('rate_sign', [1.0, 1.0, 1.0])),
+        state_timeout=float(raw.get('state_timeout', 0.5)),
+        min_altitude=float(raw.get('min_altitude', 0.15)),
+        log_commands=bool(raw.get('log_commands', False)),
         # takeoff
-        takeoff=bool(takeoff.get("enabled", False)),
-        takeoff_thrust=int(takeoff.get("thrust", 50000)),
-        takeoff_hover_z=float(takeoff.get("hover_z", 1.0)),
-        takeoff_duration=float(takeoff.get("duration", 3.0)),
+        takeoff=bool(takeoff.get('enabled', False)),
+        takeoff_thrust=int(takeoff.get('thrust', 50000)),
+        takeoff_hover_z=float(takeoff.get('hover_z', 1.0)),
+        takeoff_duration=float(takeoff.get('duration', 3.0)),
         # evader
-        evader_source=str(evader.get("source", "cf")),
-        evader_uri=evader.get("uri", "udp://127.0.0.1:19851"),
-        evader_speed=float(evader.get("speed", 3.0)),
-        evader_start=list(evader.get("start", [3.0, 0.0, 1.6])),
-        evader_dir=list(evader.get("dir", [1.0, 0.0, 0.0])),
+        evader_source=str(evader.get('source', 'cf')),
+        evader_uri=evader.get('uri', 'udp://127.0.0.1:19851'),
+        evader_speed=float(evader.get('speed', 3.0)),
+        evader_start=list(evader.get('start', [3.0, 0.0, 1.6])),
+        evader_dir=list(evader.get('dir', [1.0, 0.0, 0.0])),
         # trajectory logging
-        save_trajectory=bool(trajectory.get("save", False)),
-        trajectory_dir=trajectory.get("dir", "./trajectory_logs"),
-        trajectory_prefix=trajectory.get("prefix", "intercept"),
+        save_trajectory=bool(trajectory.get('save', False)),
+        trajectory_dir=trajectory.get('dir', './trajectory_logs'),
+        trajectory_prefix=trajectory.get('prefix', 'intercept'),
         # motion capture
-        mocap=bool(mocap.get("enabled", False)),
-        mocap_server_ip=mocap.get("server_ip", "127.0.0.1"),
-        mocap_local_ip=(mocap.get("local_ip") or ""),
-        mocap_multicast=mocap.get("multicast", "239.255.42.99"),
-        mocap_command_port=int(mocap.get("command_port", 1510)),
-        mocap_data_port=int(mocap.get("data_port", 1511)),
-        pursuer_rigid_body_id=int(mocap.get("pursuer_rigid_body_id", 31)),
-        evader_rigid_body_id=mocap.get("evader_rigid_body_id", None),
+        mocap=bool(mocap.get('enabled', False)),
+        mocap_server_ip=mocap.get('server_ip', '127.0.0.1'),
+        mocap_local_ip=(mocap.get('local_ip') or ''),
+        mocap_multicast=mocap.get('multicast', '239.255.42.99'),
+        mocap_command_port=int(mocap.get('command_port', 1510)),
+        mocap_data_port=int(mocap.get('data_port', 1511)),
+        pursuer_rigid_body_id=int(mocap.get('pursuer_rigid_body_id', 31)),
+        evader_rigid_body_id=mocap.get('evader_rigid_body_id', None),
         mocap_body_flu_quat=list(
-            mocap.get("body_flu_quat", ic.DEFAULT_MOCAP_BODY_TO_FLU_QUAT_XYZW)),
-        publish_tf=bool(mocap.get("publish_tf", False)),
-        mocap_world_frame=mocap.get("world_frame", "world"),
+            mocap.get('body_flu_quat', ic.DEFAULT_MOCAP_BODY_TO_FLU_QUAT_XYZW)),
+        publish_tf=bool(mocap.get('publish_tf', False)),
+        mocap_world_frame=mocap.get('world_frame', 'world'),
     )
 
     # -- validation ----------------------------------------------------------
     if not ns.artifact_dir:
         raise ValueError("Config must set 'artifact_dir'.")
-    if ns.evader_source not in ("scripted", "cf"):
+    if ns.evader_source not in ('scripted', 'cf'):
         raise ValueError(
             f"evader.source must be 'scripted' or 'cf', got '{ns.evader_source}'.")
-    for name, seq, length in (("rate_sign", ns.rate_sign, 3),
-                              ("evader.start", ns.evader_start, 3),
-                              ("evader.dir", ns.evader_dir, 3),
-                              ("mocap.body_flu_quat", ns.mocap_body_flu_quat, 4)):
+    for name, seq, length in (('rate_sign', ns.rate_sign, 3),
+                              ('evader.start', ns.evader_start, 3),
+                              ('evader.dir', ns.evader_dir, 3),
+                              ('mocap.body_flu_quat', ns.mocap_body_flu_quat, 4)):
         if len(seq) != length:
             raise ValueError(f"'{name}' must have {length} elements, got {len(seq)}.")
     return ns
@@ -886,16 +884,16 @@ def load_config(path: str) -> argparse.Namespace:
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
-        description="Run an exported Intercept policy on a Crazyflie via cflib. "
-                    "All settings are read from a YAML config file.")
-    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH,
-                        help="Path to the YAML configuration file "
-                             f"(default: {DEFAULT_CONFIG_PATH}).")
+        description='Run an exported Intercept policy on a Crazyflie via cflib. '
+                    'All settings are read from a YAML config file.')
+    parser.add_argument('--config', default=DEFAULT_CONFIG_PATH,
+                        help='Path to the YAML configuration file '
+                             f'(default: {DEFAULT_CONFIG_PATH}).')
     cli = parser.parse_args(argv)
     config = load_config(cli.config)
     controller = InterceptController(config)
     controller.run()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

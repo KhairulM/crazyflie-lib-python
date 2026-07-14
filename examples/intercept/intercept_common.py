@@ -6,7 +6,6 @@
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, subject to the conditions in the LICENSE
 # file at the repository root.
-
 """Shared, dependency-light building blocks for deploying an Intercept policy.
 
 This module intentionally depends **only** on ``torch`` and the Python standard
@@ -30,13 +29,13 @@ bit-for-bit live here:
 Keeping these in one small, unit-testable module avoids silent drift between
 training and deployment.
 """
-
 from __future__ import annotations
 
 import dataclasses
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from typing import Optional
 
 import torch
@@ -111,41 +110,41 @@ class PolicyMetadata:
     # -- (de)serialisation ---------------------------------------------------
     def to_dict(self) -> dict:
         return {
-            "artifact_version": self.artifact_version,
-            "algo": self.algo,
-            "obs": dataclasses.asdict(self.obs),
-            "ctbr": dataclasses.asdict(self.ctbr),
-            "sim_dt": self.sim_dt,
-            "notes": self.notes,
+            'artifact_version': self.artifact_version,
+            'algo': self.algo,
+            'obs': dataclasses.asdict(self.obs),
+            'ctbr': dataclasses.asdict(self.ctbr),
+            'sim_dt': self.sim_dt,
+            'notes': self.notes,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "PolicyMetadata":
+    def from_dict(cls, data: dict) -> 'PolicyMetadata':
         return cls(
-            artifact_version=int(data["artifact_version"]),
-            algo=str(data["algo"]),
-            obs=ObsConfig(**data["obs"]),
-            ctbr=CTBRConfig(**data["ctbr"]),
-            sim_dt=float(data.get("sim_dt", 0.02)),
-            notes=dict(data.get("notes", {})),
+            artifact_version=int(data['artifact_version']),
+            algo=str(data['algo']),
+            obs=ObsConfig(**data['obs']),
+            ctbr=CTBRConfig(**data['ctbr']),
+            sim_dt=float(data.get('sim_dt', 0.02)),
+            notes=dict(data.get('notes', {})),
         )
 
 
 def save_metadata(metadata: PolicyMetadata, path: str) -> None:
     """Write ``metadata`` to ``path`` as pretty-printed JSON."""
-    with open(path, "w", encoding="utf-8") as handle:
+    with open(path, 'w', encoding='utf-8') as handle:
         json.dump(metadata.to_dict(), handle, indent=2, sort_keys=True)
 
 
 def load_metadata(path: str) -> PolicyMetadata:
     """Read :class:`PolicyMetadata` from a JSON file, validating the version."""
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, 'r', encoding='utf-8') as handle:
         data = json.load(handle)
     metadata = PolicyMetadata.from_dict(data)
     if metadata.artifact_version != ARTIFACT_VERSION:
         raise ValueError(
-            f"Incompatible artifact version {metadata.artifact_version} "
-            f"(expected {ARTIFACT_VERSION}). Re-run export_policy.py."
+            f'Incompatible artifact version {metadata.artifact_version} '
+            f'(expected {ARTIFACT_VERSION}). Re-run export_policy.py.'
         )
     return metadata
 
@@ -244,22 +243,22 @@ def build_observation(
     if cfg.use_relative_velocity:
         if evader_lin_vel_world is None:
             raise ValueError(
-                "use_relative_velocity=True requires evader_lin_vel_world."
+                'use_relative_velocity=True requires evader_lin_vel_world.'
             )
         components.append(evader_lin_vel_world - pursuer_lin_vel_world)  # (3)
 
     if cfg.use_rot_speed:
         if pursuer_ang_vel_world is None:
             raise ValueError(
-                "use_rot_speed=True requires pursuer_ang_vel_world."
+                'use_rot_speed=True requires pursuer_ang_vel_world.'
             )
         components.append(pursuer_ang_vel_world)  # (3)
 
     obs = torch.cat(components, dim=-1)
     if obs.shape[-1] != cfg.obs_dim:
         raise ValueError(
-            f"Assembled observation has dim {obs.shape[-1]} but metadata "
-            f"declares obs_dim={cfg.obs_dim}. Check the ObsConfig flags."
+            f'Assembled observation has dim {obs.shape[-1]} but metadata '
+            f'declares obs_dim={cfg.obs_dim}. Check the ObsConfig flags.'
         )
     return obs
 
@@ -345,10 +344,10 @@ class MocapConfig:
     observation helpers above).
     """
 
-    server_ip: str = "127.0.0.1"
+    server_ip: str = '127.0.0.1'
     # None => auto-detect the local interface that routes to ``server_ip``.
     local_ip: Optional[str] = None
-    multicast_address: str = "239.255.42.99"
+    multicast_address: str = '239.255.42.99'
     command_port: int = 1510
     data_port: int = 1511
     body_to_flu_quat_xyzw: tuple = DEFAULT_MOCAP_BODY_TO_FLU_QUAT_XYZW
@@ -427,11 +426,11 @@ def transform_mocap_pose(
 
 
 # Standard artifact file names, referenced by both scripts.
-POLICY_TS_FILENAME = "policy_ts.pt"
-METADATA_FILENAME = "metadata.json"
+POLICY_TS_FILENAME = 'policy_ts.pt'
+METADATA_FILENAME = 'metadata.json'
 
 
-def artifact_paths(output_dir: str) -> "tuple[str, str]":
+def artifact_paths(output_dir: str) -> 'tuple[str, str]':
     """Return ``(torchscript_path, metadata_path)`` inside ``output_dir``."""
     return (
         os.path.join(output_dir, POLICY_TS_FILENAME),

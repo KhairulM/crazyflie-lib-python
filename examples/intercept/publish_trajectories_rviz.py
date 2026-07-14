@@ -6,7 +6,6 @@ Example:
         --pursuer-csv trajectory_logs/intercept_pursuer.csv \
         --evader-csv trajectory_logs/intercept_evader.csv
 """
-
 from __future__ import annotations
 
 import argparse
@@ -17,14 +16,16 @@ import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy
+from rclpy.qos import QoSProfile
+from rclpy.qos import ReliabilityPolicy
 
 
 class TrajectoryPublisher(Node):
     """Publishes pursuer and evader trajectories as nav_msgs/Path."""
 
     def __init__(self, args: argparse.Namespace) -> None:
-        super().__init__("intercept_trajectory_publisher")
+        super().__init__('intercept_trajectory_publisher')
         self._frame_id = args.frame_id
         self._pursuer_path = self._load_csv_as_path(args.pursuer_csv)
         self._evader_path = self._load_csv_as_path(args.evader_csv)
@@ -39,27 +40,27 @@ class TrajectoryPublisher(Node):
 
         self._timer = self.create_timer(args.publish_period, self._publish)
         self.get_logger().info(
-            "Publishing trajectories: "
-            f"pursuer poses={len(self._pursuer_path.poses)} on {args.pursuer_topic}, "
-            f"evader poses={len(self._evader_path.poses)} on {args.evader_topic}, "
-            f"frame={self._frame_id}"
+            'Publishing trajectories: '
+            f'pursuer poses={len(self._pursuer_path.poses)} on {args.pursuer_topic}, '
+            f'evader poses={len(self._evader_path.poses)} on {args.evader_topic}, '
+            f'frame={self._frame_id}'
         )
 
     def _load_csv_as_path(self, csv_path: str) -> Path:
         poses: List[PoseStamped] = []
-        with open(csv_path, "r", encoding="utf-8", newline="") as fp:
+        with open(csv_path, 'r', encoding='utf-8', newline='') as fp:
             reader = csv.DictReader(fp)
-            required = {"x", "y", "z"}
+            required = {'x', 'y', 'z'}
             if reader.fieldnames is None or not required.issubset(reader.fieldnames):
                 raise ValueError(
-                    f"CSV {csv_path} is missing required columns {sorted(required)}"
+                    f'CSV {csv_path} is missing required columns {sorted(required)}'
                 )
             for row in reader:
                 pose = PoseStamped()
                 pose.header.frame_id = self._frame_id
-                pose.pose.position.x = float(row["x"])
-                pose.pose.position.y = float(row["y"])
-                pose.pose.position.z = float(row["z"])
+                pose.pose.position.x = float(row['x'])
+                pose.pose.position.y = float(row['y'])
+                pose.pose.position.z = float(row['z'])
                 pose.pose.orientation.w = 1.0
                 poses.append(pose)
 
@@ -85,38 +86,38 @@ class TrajectoryPublisher(Node):
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Publish intercept trajectory CSV files as ROS 2 Path topics."
+        description='Publish intercept trajectory CSV files as ROS 2 Path topics.'
     )
     parser.add_argument(
-        "--pursuer-csv",
+        '--pursuer-csv',
         required=True,
-        help="Path to the pursuer trajectory CSV file.",
+        help='Path to the pursuer trajectory CSV file.',
     )
     parser.add_argument(
-        "--evader-csv",
+        '--evader-csv',
         required=True,
-        help="Path to the evader trajectory CSV file.",
+        help='Path to the evader trajectory CSV file.',
     )
     parser.add_argument(
-        "--frame-id",
-        default="map",
-        help="Frame id for published Path messages.",
+        '--frame-id',
+        default='map',
+        help='Frame id for published Path messages.',
     )
     parser.add_argument(
-        "--pursuer-topic",
-        default="/intercept/pursuer_path",
-        help="ROS 2 topic for the pursuer Path.",
+        '--pursuer-topic',
+        default='/intercept/pursuer_path',
+        help='ROS 2 topic for the pursuer Path.',
     )
     parser.add_argument(
-        "--evader-topic",
-        default="/intercept/evader_path",
-        help="ROS 2 topic for the evader Path.",
+        '--evader-topic',
+        default='/intercept/evader_path',
+        help='ROS 2 topic for the evader Path.',
     )
     parser.add_argument(
-        "--publish-period",
+        '--publish-period',
         type=float,
         default=0.5,
-        help="Publish period in seconds.",
+        help='Publish period in seconds.',
     )
     return parser.parse_args()
 
@@ -134,5 +135,5 @@ def main() -> None:
         rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
